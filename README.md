@@ -8,6 +8,27 @@ HTTP clients ──► threaded API ──► bounded queue ──► batch work
                        └── status ◄─────┴──── metrics ────┘
 ```
 
+## Interactive example
+
+[Open Batchline on GitHub Pages](https://elliottbarnes.github.io/batchline/).
+
+Edit arrival times, batch capacity, queue slots, collection window and assumed model time. Step through admissions, batch starts, completions and overload rejections. The timeline is a **deterministic scheduling simulation**, not the Python server, a load test or measured throughput. Same-time completions precede arrivals, and the browser holds at most 80 requests. It does not simulate HTTP, caller timeouts, threads or shutdown.
+
+A second panel runs the toy model's weighted mean and stable sigmoid in JavaScript. Tests compare 104 feature vectors with the real Python implementation. Indeterminate overflow is rejected; large signed logits otherwise saturate to 0 or 1.
+
+The native executor now rejects work after shutdown, resolves waiting futures with `ExecutorClosed`, and safely skips cancelled queued work. A batch already collected may finish; `close()` waits at most two seconds for the worker and cannot forcibly stop arbitrary model code. HTTP requests interrupted by shutdown receive 503. This remains an educational single-worker service.
+
+To preview and verify the browser example (Node.js 24+ and Python required):
+
+```sh
+node --test tests-browser/*.test.mjs
+node scripts/verify-demo.mjs
+python3 -m http.server 8081 --bind 127.0.0.1 --directory demo
+```
+
+Open `http://localhost:8081`. `demo/` contains the entire static artifact. CI runs native tests, model parity, queue conservation/bounds and the container build before publishing that folder. Only the Pages deployment job has `pages: write` and `id-token: write`; normal checks remain read-only. See [demo verification](docs/DEMO.md).
+
+
 ## What you will learn
 
 - **Serving:** expose inference through a versioned HTTP endpoint.
@@ -60,7 +81,7 @@ Successful response:
   "request_id": "66bbc7fb-17c2-4568-9e4f-44fa7d692cab",
   "prediction": {
     "label": "positive",
-    "score": 0.71095,
+    "score": 0.682799,
     "model_version": "toy-logistic-v1"
   }
 }

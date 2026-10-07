@@ -72,6 +72,27 @@ class ServerTests(unittest.TestCase):
         self.assertIn("inference_http_requests_total", metrics)
         self.assertIn("inference_batches_total", metrics)
 
+    def test_closed_executor_returns_service_unavailable(self) -> None:
+        config = Config("127.0.0.1", 0, 1, 0, 2, 1000, 0)
+        server = build_server(config)
+        server.executor.close()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/infer",
+                data=b'{"inputs":[1]}',
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(request)
+            self.assertEqual(error.exception.code, 503)
+            self.assertEqual(json.load(error.exception)["error"], "service_stopping")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=1)
+
     def test_listener_backlog_handles_bursty_traffic(self) -> None:
         self.assertGreaterEqual(self.server.request_queue_size, 128)
 

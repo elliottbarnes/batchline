@@ -10,6 +10,10 @@ from typing import Dict, List, Sequence
 from .metrics import Metrics
 
 
+class ExecutorClosed(Exception):
+    """Raised when shutdown prevents queued or new work from running."""
+
+
 class QueueFull(Exception):
     """Raised when backpressure rejects a request."""
 
@@ -35,6 +39,7 @@ class BatchExecutor:
         self.batch_window_seconds = batch_window_ms / 1000
         self._queue: "queue.Queue[WorkItem]" = queue.Queue(maxsize=max_queue_size)
         self._stop = threading.Event()
+        self._state_lock = threading.Lock()
         self._thread = threading.Thread(target=self._work, name="batch-worker", daemon=True)
         self._thread.start()
 
@@ -44,16 +49,34 @@ class BatchExecutor:
 
     def submit(self, inputs: Sequence[float]) -> Future:
         future: Future = Future()
-        try:
-            self._queue.put_nowait(WorkItem(inputs=inputs, future=future))
-        except queue.Full as exc:
-            raise QueueFull from exc
+        with self._state_lock:
+            if self._stop.is_set():
+                raise ExecutorClosed("executor is closed")
+            try:
+                self._queue.put_nowait(WorkItem(inputs=inputs, future=future))
+            except queue.Full as exc:
+                raise QueueFull from exc
         self.metrics.queue_depth(self._queue.qsize())
         return future
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2)
+        waiting = []
+        with self._state_lock:
+            self._stop.set()
+            while True:
+                try:
+                    waiting.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+        # Future callbacks run synchronously. Never execute user callbacks while
+        # holding the admission lock: callbacks may submit or close again.
+        for item in waiting:
+            if item.future.set_running_or_notify_cancel():
+                item.future.set_exception(ExecutorClosed("executor closed before execution"))
+            self._queue.task_done()
+        self.metrics.queue_depth(self._queue.qsize())
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout=2)
 
     def _work(self) -> None:
         while not self._stop.is_set():
@@ -74,20 +97,25 @@ class BatchExecutor:
                     break
 
             self.metrics.queue_depth(self._queue.qsize())
+            active = [item for item in batch if item.future.set_running_or_notify_cancel()]
+            if not active:
+                for _ in batch:
+                    self._queue.task_done()
+                continue
             started = time.monotonic()
             try:
                 outputs: List[Dict[str, object]] = self.model.predict_batch(
-                    [item.inputs for item in batch]
+                    [item.inputs for item in active]
                 )
-                if len(outputs) != len(batch):
+                if len(outputs) != len(active):
                     raise RuntimeError("model returned a different number of outputs than inputs")
-                for item, output in zip(batch, outputs):
+                for item, output in zip(active, outputs):
                     item.future.set_result(output)
             except Exception as exc:  # keep one model failure from killing the worker
-                for item in batch:
+                for item in active:
                     item.future.set_exception(exc)
             finally:
                 elapsed = time.monotonic() - started
-                self.metrics.observe_inference(elapsed, len(batch))
+                self.metrics.observe_inference(elapsed, len(active))
                 for _ in batch:
                     self._queue.task_done()

@@ -12,6 +12,10 @@ class ToyModelTests(unittest.TestCase):
         self.assertEqual(results[0]["label"], "positive")
         self.assertEqual(results[1]["label"], "negative")
 
+    def test_undefined_overflow_is_rejected_instead_of_emitting_nan(self) -> None:
+        with self.assertRaisesRegex(ValueError, "overflow"):
+            ToyModel(latency_ms=0).predict_batch([[1e308, 1e308, -1e308]])
+
     def test_sigmoid_stays_stable_for_large_values(self) -> None:
         model = ToyModel(latency_ms=0)
         results = model.predict_batch([[1e308], [-1e308]])
