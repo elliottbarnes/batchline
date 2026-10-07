@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Dict, Optional, Tuple, Type
 
-from .batching import BatchExecutor, QueueFull
+from .batching import BatchExecutor, ExecutorClosed, QueueFull
 from .config import Config
 from .metrics import Metrics
 from .model import ToyModel
@@ -73,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"request_id": request_id, "prediction": prediction}, request_id)
         except ValueError as exc:
             self._json(422, {"error": "invalid_request", "message": str(exc)}, request_id)
+        except ExecutorClosed:
+            self._json(503, {"error": "service_stopping"}, request_id)
         except QueueFull:
             self._json(429, {"error": "queue_full", "message": "retry later"}, request_id)
         except FutureTimeout:

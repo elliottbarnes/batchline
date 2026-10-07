@@ -23,6 +23,8 @@ class ToyModel:
         for values in batch:
             weighted_sum = sum((index + 1) * value for index, value in enumerate(values))
             logit = weighted_sum / max(len(values), 1)
+            if math.isnan(logit):
+                raise ValueError("weighted sum is undefined after overflow; use smaller feature values")
             probability = _stable_sigmoid(logit)
             predictions.append(
                 {
